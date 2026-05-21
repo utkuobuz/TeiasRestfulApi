@@ -56,7 +56,7 @@ Projeyi çalıştırmadan önce kök dizindeki `appsettings.json` dosyasını ke
 
 (Not: Service Key, YTBS portalında Sistem Yönetimi -> Sistem Parametresi -> YTBS Web Servis menüsünden temin edilmelidir.)
 
-💻 Windows Servisi Olarak Kurulum
+## 💻 Windows Servisi Olarak Kurulum
 Bu uygulama Windows Server 2019/2022 üzerinde bir hizmet (service) olarak çalışacak şekilde tasarlanmıştır.
 
 1. Projeyi Release modunda derleyin (Publish).
@@ -75,7 +75,7 @@ sc.exe create "TeiasScadaAktarim" binpath= "C:\Yazilimlar\TeiasScadaServis\TEİA
 sc.exe start "TeiasScadaAktarim"
 ```
 
-📁 Proje Klasör Yapısı
+## 📁 Proje Klasör Yapısı
 . /DTOs: TEİAŞ'ın JSON formatına birebir uyan Veri Transfer Objeleri (Request/Response modelleri) ve SCADA SQL eşleştirme sınıfları.
 
 . /Services/YTBSClient.cs: TEİAŞ sunucularıyla iletişim kuran, Header yönetimini ve HTTP POST işlemlerini üstlenen ana motor.
@@ -84,5 +84,5 @@ sc.exe start "TeiasScadaAktarim"
 
 . Program.cs: Dependency Injection (DI) ayarlarının, loglamanın ve Windows Service yapılandırmasının yapıldığı başlangıç noktası.
 
-🤝 Katkıda Bulunma
+## 🤝 Katkıda Bulunma
 Bu proje, endüstriyel veri entegrasyonu standartlarına uygun olarak geliştirilmiştir. Geliştirmelere ve Pull Request (PR) gönderimlerine açıktır. Veritabanı sorgu detayları (SCADA Tablo yapıları) firmalara özel olduğu için GetScadaDataList metodu içerisinde Dapper entegrasyonu için şablon bırakılmıştır.
