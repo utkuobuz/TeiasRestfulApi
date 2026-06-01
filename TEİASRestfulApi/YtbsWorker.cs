@@ -92,7 +92,7 @@ namespace TEİASRestfulApi
                 INNER JOIN (
                     SELECT VAR, MAX(TIMESTAMP_S) AS MaxTime
                     FROM scada.Zenon_Export_DATA
-                    WHERE TIMESTAMP_S >= UNIX_TIMESTAMP(NOW() - INTERVAL 45 DAY)
+                    WHERE TIMESTAMP_S >= UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY)
                     GROUP BY VAR
                 ) latest ON d.VAR = latest.VAR AND d.TIMESTAMP_S = latest.MaxTime;";
 

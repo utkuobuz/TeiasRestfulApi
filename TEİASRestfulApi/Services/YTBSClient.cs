@@ -1,21 +1,23 @@
 ﻿using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using TEİASRestfulApi.DTOs;
 
 public class YTBSClient
 {
     private readonly HttpClient _httpClient;
+    private readonly ILogger<YTBSClient> _logger; // Logger eklendi
     private string _serviceKey = "";
     private string _currentJeton = "";
 
-    public YTBSClient(HttpClient httpClient)
+    public YTBSClient(HttpClient httpClient, ILogger<YTBSClient> logger)
     {
         _httpClient = httpClient;
+        _logger = logger;
         _httpClient.BaseAddress = new Uri("https://ytbsws.teias.gov.tr/ytbs-webservis/rest/");
     }
 
-    // Worker'dan ServiceKey'i almak için küçük bir metod
     public void SetServiceKey(string serviceKey)
     {
         _serviceKey = serviceKey;
@@ -27,7 +29,6 @@ public class YTBSClient
         var content = new StringContent(JsonSerializer.Serialize(loginData), Encoding.UTF8, "application/json");
 
         _httpClient.DefaultRequestHeaders.Clear();
-        // Dokümana göre doğru Header ismi: SERVICE_KEY 
         _httpClient.DefaultRequestHeaders.Add("SERVICE_KEY", _serviceKey);
 
         var response = await _httpClient.PostAsync("yetkilendirme/login", content);
@@ -43,10 +44,13 @@ public class YTBSClient
                 return true;
             }
         }
+        else
+        {
+            _logger.LogError($"TEİAŞ Login Hatası: {response.StatusCode}");
+        }
         return false;
     }
 
-    // Parametre tipini yeni Request modelimizle değiştirdik
     public async Task SendUretimVerisiAsync(AnlikUretimEkleRequest requestData)
     {
         if (string.IsNullOrEmpty(_currentJeton)) throw new Exception("Önce Login olmalısınız!");
@@ -54,7 +58,6 @@ public class YTBSClient
         var content = new StringContent(JsonSerializer.Serialize(requestData), Encoding.UTF8, "application/json");
 
         _httpClient.DefaultRequestHeaders.Clear();
-        // Dokümana göre doğru Header isimleri 
         _httpClient.DefaultRequestHeaders.Add("SERVICE_KEY", _serviceKey);
         _httpClient.DefaultRequestHeaders.Add("AUTH_TOKEN", _currentJeton);
 
@@ -62,11 +65,14 @@ public class YTBSClient
 
         if (response.IsSuccessStatusCode)
         {
-            Console.WriteLine("Veri başarıyla gönderildi.");
+            // Console yerine Logger kullanıyoruz
+            _logger.LogInformation($"Veri başarıyla gönderildi. Lisans No: {requestData.baglantiAnlasmasiSirketiLisansNo}");
         }
         else
         {
-            Console.WriteLine($"Hata: {response.StatusCode} - {await response.Content.ReadAsStringAsync()}");
+            // Hata detayını sisteme kaydediyoruz
+            string errorContent = await response.Content.ReadAsStringAsync();
+            _logger.LogError($"Veri Gönderim Hatası: {response.StatusCode} - Detay: {errorContent}");
         }
     }
 }
