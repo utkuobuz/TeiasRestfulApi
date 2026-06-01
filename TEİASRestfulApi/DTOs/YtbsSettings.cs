@@ -9,5 +9,6 @@ using System.Text;
             public string? KullaniciAdi { get; set; }
             public string? Sifre { get; set; }
             public string? BaseUrl { get; set; }
+            public string ConnectionString { get; set; }
         }
     }

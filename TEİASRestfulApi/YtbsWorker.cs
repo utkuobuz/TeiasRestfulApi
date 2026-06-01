@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Options;
 using System.Linq;
 using TEİASRestfulApi.DTOs;
+using MySqlConnector;
+using Dapper;
 
 namespace TEİASRestfulApi
 {
@@ -22,9 +24,12 @@ namespace TEİASRestfulApi
             _logger.LogInformation("YTBS Çoklu Veri Aktarım Servisi başlatıldı.");
             _ytbsClient.SetServiceKey(_settings.ServiceKey);
 
+            // Canlı ortam için periyot 15 dakika olarak ayarlandı
             using PeriodicTimer timer = new(TimeSpan.FromMinutes(15));
 
-            while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken))
+            // do-while sayesinde servis açılır açılmaz ilk veriyi bekletmeden atar, 
+            // ardından 15 dakikada bir çalışmaya devam eder.
+            do
             {
                 try
                 {
@@ -32,15 +37,12 @@ namespace TEİASRestfulApi
 
                     if (isLogged)
                     {
-                        // 1. Veritabanından tüm 443 santralin verisini liste olarak al
                         List<ScadaDbRow> okunanVeriler = GetScadaDataList();
 
                         if (okunanVeriler != null && okunanVeriler.Any())
                         {
-                            // 2. Verileri "Bağlantı Anlaşması Lisans Numarasına" göre GRUPLA
                             var groupedData = okunanVeriler.GroupBy(x => x.BaglantiAnlasmasiSirketiLisansNo);
 
-                            // 3. Her bir lisans grubu için ayrı bir paket oluştur ve gönder
                             foreach (var group in groupedData)
                             {
                                 var uretimVerisiPaketi = new AnlikUretimEkleRequest
@@ -48,17 +50,20 @@ namespace TEİASRestfulApi
                                     baglantiAnlasmasiSirketiLisansNo = group.Key,
                                     veri = group.Select(g => new UretimVeriItem
                                     {
-                                        tarih = DateTime.Now.ToString("yyyy-MM-dd"),
-                                        saat = DateTime.Now.ToString("HH:mm"),
+                                        tarih = g.Tarih,
+                                        saat = g.Saat,
                                         lisanssizSantralId = g.LisanssizSantralId,
                                         veriDeger = g.AktifGuc
                                     }).ToList()
                                 };
 
                                 _logger.LogInformation($"Lisans No: {group.Key} için {group.Count()} adet santral verisi gönderiliyor...");
-
                                 await _ytbsClient.SendUretimVerisiAsync(uretimVerisiPaketi);
                             }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Veritabanından gönderilecek güncel SCADA verisi bulunamadı.");
                         }
                     }
                 }
@@ -66,20 +71,40 @@ namespace TEİASRestfulApi
                 {
                     _logger.LogError(ex, "Döngü sırasında hata oluştu.");
                 }
-            }
+
+            } while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken));
         }
 
-        // SCADA SQL veritabanından 443 santralin tamamını okuyacak metod
         private List<ScadaDbRow> GetScadaDataList()
         {
-            // Şimdilik test edebilmemiz için "Mock" (sahte) bir liste dönüyoruz.
-            // SCADA ekibinden IP ve Tablo bilgisi geldiğinde burayı Dapper SQL kodlarıyla değiştireceğiz.
-            return new List<ScadaDbRow>
+            using var connection = new MySqlConnection(_settings.ConnectionString);
+
+            // Veritabanı sorgusu (Son 45 günü tarayacak şekilde ayarlı, canlıda da böyle kalabilir)
+            string sql = @"
+                SELECT
+                    m.TEIAS_PLANT_ID AS LisanssizSantralId,
+                    m.LICENSE_NO AS BaglantiAnlasmasiSirketiLisansNo,
+                    CAST(REPLACE(d.VALUE, ',', '.') AS DECIMAL(10,4)) AS AktifGuc,
+                    DATE_FORMAT(FROM_UNIXTIME(d.TIMESTAMP_S), '%Y-%m-%d') AS Tarih,
+                    DATE_FORMAT(FROM_UNIXTIME(d.TIMESTAMP_S), '%H:%i') AS Saat
+                FROM scada.TEIAS_Mapping m
+                INNER JOIN scada.Zenon_Export_DATA d ON d.VAR = m.VAR_NAME
+                INNER JOIN (
+                    SELECT VAR, MAX(TIMESTAMP_S) AS MaxTime
+                    FROM scada.Zenon_Export_DATA
+                    WHERE TIMESTAMP_S >= UNIX_TIMESTAMP(NOW() - INTERVAL 45 DAY)
+                    GROUP BY VAR
+                ) latest ON d.VAR = latest.VAR AND d.TIMESTAMP_S = latest.MaxTime;";
+
+            try
             {
-                new ScadaDbRow { LisanssizSantralId = 37402, BaglantiAnlasmasiSirketiLisansNo = "ED-OSB/1813-6/1277", AktifGuc = 1.45 },
-                new ScadaDbRow { LisanssizSantralId = 10983, BaglantiAnlasmasiSirketiLisansNo = "ED-OSB/1813-6/1277", AktifGuc = 0.88 },
-                new ScadaDbRow { LisanssizSantralId = 45134, BaglantiAnlasmasiSirketiLisansNo = "ED-OSB/1398-4/1018", AktifGuc = 0.77 }
-            };
+                return connection.Query<ScadaDbRow>(sql).ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "MySQL'den SCADA verisi çekilirken bir hata oluştu.");
+                return new List<ScadaDbRow>();
+            }
         }
     }
 }
