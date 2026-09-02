@@ -6,6 +6,12 @@
 # dotenv files
 .env
 
+# Local secrets (do not commit)
+appsettings.Local.json
+**/appsettings.Local.json
+publish-standalone/
+publish-standalone.zip
+
 # User-specific files
 *.rsuser
 *.suo

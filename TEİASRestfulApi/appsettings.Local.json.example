@@ -1,0 +1,11 @@
+{
+  "YtbsSettings": {
+    "ServiceKey": "YTBS_PORTALINDAN_ALINAN_SERVICE_KEY",
+    "KullaniciAdi": "kullanici.adi",
+    "Sifre": "Sifre",
+    "BaseUrl": "https://ytbsws.teias.gov.tr/ytbs-webservis/rest/",
+    "ConnectionString": "Server=127.0.0.1;Port=3306;Database=scada;Uid=USER;Pwd=PASSWORD;",
+    "ActivePowerUnit": "MW",
+    "AnlikMaxAgeMinutes": 20
+  }
+}

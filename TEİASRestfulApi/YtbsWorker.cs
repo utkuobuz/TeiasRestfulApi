@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Options;
-using System.Linq;
 using TEİASRestfulApi.DTOs;
 using MySqlConnector;
 using Dapper;
@@ -8,6 +7,8 @@ namespace TEİASRestfulApi
 {
     public class YtbsWorker : BackgroundService
     {
+        private static readonly TimeSpan StartupQuarterGrace = TimeSpan.FromSeconds(30);
+
         private readonly ILogger<YtbsWorker> _logger;
         private readonly YTBSClient _ytbsClient;
         private readonly YtbsSettings _settings;
@@ -24,77 +25,174 @@ namespace TEİASRestfulApi
             _logger.LogInformation("YTBS Çoklu Veri Aktarım Servisi başlatıldı.");
             _ytbsClient.SetServiceKey(_settings.ServiceKey);
 
-            // Canlı ortam için periyot 15 dakika olarak ayarlandı
-            using PeriodicTimer timer = new(TimeSpan.FromMinutes(15));
-
-            // do-while sayesinde servis açılır açılmaz ilk veriyi bekletmeden atar, 
-            // ardından 15 dakikada bir çalışmaya devam eder.
-            do
+            if (string.IsNullOrWhiteSpace(_settings.ConnectionString)
+                || string.IsNullOrWhiteSpace(_settings.KullaniciAdi)
+                || string.IsNullOrWhiteSpace(_settings.Sifre)
+                || string.IsNullOrWhiteSpace(_settings.ServiceKey))
             {
-                try
+                _logger.LogError("YtbsSettings eksik. appsettings.Local.json veya ortam değişkenlerini doldurun (ConnectionString, KullaniciAdi, Sifre, ServiceKey).");
+                return;
+            }
+
+            bool isKilowatt = ScadaValueNormalizer.IsKilowatt(_settings.ActivePowerUnit);
+            _logger.LogInformation(
+                "ActivePower birimi: {Unit}. Anlık örnek azami yaşı: {MaxAge} dk.",
+                isKilowatt ? "kW→MW" : "MW",
+                Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60));
+
+            try
+            {
+                TimeSpan initialDelay = YtbsTimeSlots.DelayUntilNextAlignedRun(DateTime.Now, StartupQuarterGrace);
+                if (initialDelay > TimeSpan.Zero)
                 {
-                    bool isLogged = await _ytbsClient.LoginAsync(_settings.KullaniciAdi, _settings.Sifre);
+                    _logger.LogInformation("Sonraki 15 dk dilimine hizalanıyor. Bekleme: {Delay}.", initialDelay);
+                    await Task.Delay(initialDelay, stoppingToken);
+                }
 
-                    if (isLogged)
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    await RunCycleAsync(isKilowatt);
+
+                    TimeSpan wait = YtbsTimeSlots.DelayUntilNextQuarter(DateTime.Now);
+                    if (wait > TimeSpan.Zero)
                     {
-                        List<ScadaDbRow> okunanVeriler = GetScadaDataList();
-
-                        if (okunanVeriler != null && okunanVeriler.Any())
-                        {
-                            var groupedData = okunanVeriler.GroupBy(x => x.BaglantiAnlasmasiSirketiLisansNo);
-
-                            foreach (var group in groupedData)
-                            {
-                                var uretimVerisiPaketi = new AnlikUretimEkleRequest
-                                {
-                                    baglantiAnlasmasiSirketiLisansNo = group.Key,
-                                    veri = group.Select(g => new UretimVeriItem
-                                    {
-                                        tarih = g.Tarih,
-                                        saat = g.Saat,
-                                        lisanssizSantralId = g.LisanssizSantralId,
-                                        veriDeger = g.AktifGuc
-                                    }).ToList()
-                                };
-
-                                _logger.LogInformation($"Lisans No: {group.Key} için {group.Count()} adet santral verisi gönderiliyor...");
-                                await _ytbsClient.SendUretimVerisiAsync(uretimVerisiPaketi);
-                            }
-                        }
-                        else
-                        {
-                            _logger.LogWarning("Veritabanından gönderilecek güncel SCADA verisi bulunamadı.");
-                        }
+                        await Task.Delay(wait, stoppingToken);
                     }
                 }
-                catch (Exception ex)
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Servis kapanışı
+            }
+        }
+
+        private async Task RunCycleAsync(bool isKilowatt)
+        {
+            DateTime now = DateTime.Now;
+            DateTime quarterSlot = YtbsTimeSlots.GetCurrentQuarterStart(now);
+
+            try
+            {
+                bool isLogged = await _ytbsClient.LoginAsync(_settings.KullaniciAdi!, _settings.Sifre!);
+                if (!isLogged)
                 {
-                    _logger.LogError(ex, "Döngü sırasında hata oluştu.");
+                    return;
                 }
 
-            } while (!stoppingToken.IsCancellationRequested && await timer.WaitForNextTickAsync(stoppingToken));
+                await SendAnlikAsync(quarterSlot, isKilowatt);
+
+                if (YtbsTimeSlots.IsHourlySlot(now))
+                {
+                    await SendSaatlikAsync(YtbsTimeSlots.GetPreviousHourStart(now), isKilowatt);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Döngü sırasında hata oluştu.");
+            }
+        }
+
+        private async Task SendAnlikAsync(DateTime quarterSlot, bool isKilowatt)
+        {
+            List<ScadaDbRow> okunanAnlikVeriler = GetScadaDataList();
+            if (okunanAnlikVeriler == null || !okunanAnlikVeriler.Any())
+            {
+                _logger.LogWarning(
+                    "Anlık SCADA verisi yok veya son {MaxAge} dk içinde örnek gelmedi. Dilim {Tarih} {Saat} atlandı.",
+                    Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60),
+                    YtbsTimeSlots.FormatTarih(quarterSlot),
+                    YtbsTimeSlots.FormatSaat(quarterSlot));
+                return;
+            }
+
+            foreach (var group in okunanAnlikVeriler.GroupBy(x => x.BaglantiAnlasmasiSirketiLisansNo))
+            {
+                var uretimVerisiPaketi = new AnlikUretimEkleRequest
+                {
+                    baglantiAnlasmasiSirketiLisansNo = group.Key,
+                    veri = ScadaValueNormalizer.BuildItems(
+                        group,
+                        x => x.LisanssizSantralId,
+                        x => x.AktifGuc,
+                        x => x.MaxCapacity,
+                        quarterSlot,
+                        isKilowatt)
+                };
+
+                LogPaketOzeti("ANLIK MW", uretimVerisiPaketi, quarterSlot);
+                await _ytbsClient.SendUretimVerisiAsync(uretimVerisiPaketi);
+            }
+        }
+
+        private async Task SendSaatlikAsync(DateTime hourSlot, bool isKilowatt)
+        {
+            List<SaatlikUretimVeri> okunanSaatlikVeriler = GetSaatlikScadaDataList();
+            if (okunanSaatlikVeriler == null || !okunanSaatlikVeriler.Any())
+            {
+                _logger.LogWarning(
+                    "Saatlik SCADA verisi bulunamadı. Dilim {Tarih} {Saat}.",
+                    YtbsTimeSlots.FormatTarih(hourSlot),
+                    YtbsTimeSlots.FormatSaat(hourSlot));
+                return;
+            }
+
+            foreach (var group in okunanSaatlikVeriler.GroupBy(x => x.BaglantiAnlasmasiSirketiLisansNo))
+            {
+                var saatlikUretimPaketi = new AnlikUretimEkleRequest
+                {
+                    baglantiAnlasmasiSirketiLisansNo = group.Key,
+                    veri = ScadaValueNormalizer.BuildItems(
+                        group,
+                        x => x.LisanssizSantralId,
+                        x => x.ToplamEnerjiMWh,
+                        x => x.MaxCapacity,
+                        hourSlot,
+                        isKilowatt)
+                };
+
+                LogPaketOzeti("SAATLİK MWh", saatlikUretimPaketi, hourSlot);
+                await _ytbsClient.SendSaatlikUretimVerisiAsync(saatlikUretimPaketi);
+            }
+        }
+
+        private void LogPaketOzeti(string kanal, AnlikUretimEkleRequest paket, DateTime slot)
+        {
+            var degerler = paket.veri?
+                .Select(v => v.veriDeger)
+                .Where(v => v.HasValue)
+                .Select(v => v!.Value)
+                .ToList() ?? [];
+
+            _logger.LogInformation(
+                "[{Kanal}] Lisans {Lisans} adet={Adet} min={Min} max={Max} dilim={Tarih} {Saat}",
+                kanal,
+                paket.baglantiAnlasmasiSirketiLisansNo,
+                degerler.Count,
+                degerler.Count > 0 ? degerler.Min() : (double?)null,
+                degerler.Count > 0 ? degerler.Max() : (double?)null,
+                YtbsTimeSlots.FormatTarih(slot),
+                YtbsTimeSlots.FormatSaat(slot));
         }
 
         private List<ScadaDbRow> GetScadaDataList()
         {
             using var connection = new MySqlConnection(_settings.ConnectionString);
-
-            // Veritabanı sorgusu (Son 45 günü tarayacak şekilde ayarlı, canlıda da böyle kalabilir)
-            string sql = @"
+            int maxAgeMinutes = Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60);
+            string sql = $@"
                 SELECT
                     m.TEIAS_PLANT_ID AS LisanssizSantralId,
                     m.LICENSE_NO AS BaglantiAnlasmasiSirketiLisansNo,
-                    CAST(REPLACE(d.VALUE, ',', '.') AS DECIMAL(10,4)) AS AktifGuc,
-                    DATE_FORMAT(FROM_UNIXTIME(d.TIMESTAMP_S), '%Y-%m-%d') AS Tarih,
-                    DATE_FORMAT(FROM_UNIXTIME(d.TIMESTAMP_S), '%H:%i') AS Saat
+                    m.MAX_CAPACITY AS MaxCapacity,
+                    CAST(SUM(CAST(REPLACE(d.VALUE, ',', '.') AS DECIMAL(10,4))) AS DECIMAL(10,4)) AS AktifGuc
                 FROM scada.TEIAS_Mapping m
                 INNER JOIN scada.Zenon_Export_DATA d ON d.VAR = m.VAR_NAME
                 INNER JOIN (
                     SELECT VAR, MAX(TIMESTAMP_S) AS MaxTime
                     FROM scada.Zenon_Export_DATA
-                    WHERE TIMESTAMP_S >= UNIX_TIMESTAMP(NOW() - INTERVAL 1 DAY)
+                    WHERE TIMESTAMP_S >= UNIX_TIMESTAMP(NOW() - INTERVAL {maxAgeMinutes} MINUTE)
                     GROUP BY VAR
-                ) latest ON d.VAR = latest.VAR AND d.TIMESTAMP_S = latest.MaxTime;";
+                ) latest ON d.VAR = latest.VAR AND d.TIMESTAMP_S = latest.MaxTime
+                GROUP BY m.TEIAS_PLANT_ID, m.LICENSE_NO, m.MAX_CAPACITY;";
 
             try
             {
@@ -102,8 +200,42 @@ namespace TEİASRestfulApi
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "MySQL'den SCADA verisi çekilirken bir hata oluştu.");
+                _logger.LogError(ex, "MySQL'den anlık SCADA verisi çekilirken bir hata oluştu.");
                 return new List<ScadaDbRow>();
+            }
+        }
+
+        private List<SaatlikUretimVeri> GetSaatlikScadaDataList()
+        {
+            using var connection = new MySqlConnection(_settings.ConnectionString);
+            string sql = @"
+                SELECT
+                    TEIAS_PLANT_ID AS LisanssizSantralId,
+                    LICENSE_NO AS BaglantiAnlasmasiSirketiLisansNo,
+                    MAX_CAPACITY AS MaxCapacity,
+                    CAST(SUM(VarOrtMw) AS DECIMAL(10,4)) AS ToplamEnerjiMWh
+                FROM (
+                    SELECT
+                        m.TEIAS_PLANT_ID,
+                        m.LICENSE_NO,
+                        m.MAX_CAPACITY,
+                        AVG(CAST(REPLACE(d.VALUE, ',', '.') AS DECIMAL(10,4))) AS VarOrtMw
+                    FROM scada.TEIAS_Mapping m
+                    INNER JOIN scada.Zenon_Export_DATA d ON d.VAR = m.VAR_NAME
+                    WHERE d.TIMESTAMP_S >= UNIX_TIMESTAMP(DATE_FORMAT(NOW() - INTERVAL 1 HOUR, '%Y-%m-%d %H:00:00'))
+                      AND d.TIMESTAMP_S <  UNIX_TIMESTAMP(DATE_FORMAT(NOW(), '%Y-%m-%d %H:00:00'))
+                    GROUP BY m.TEIAS_PLANT_ID, m.LICENSE_NO, m.MAX_CAPACITY, m.VAR_NAME
+                ) varOrt
+                GROUP BY TEIAS_PLANT_ID, LICENSE_NO, MAX_CAPACITY;";
+
+            try
+            {
+                return connection.Query<SaatlikUretimVeri>(sql).ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "MySQL'den Saatlik SCADA verisi çekilirken bir hata oluştu.");
+                return new List<SaatlikUretimVeri>();
             }
         }
     }
