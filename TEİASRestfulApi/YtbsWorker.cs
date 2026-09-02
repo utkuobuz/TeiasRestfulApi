@@ -38,7 +38,7 @@ namespace TEİASRestfulApi
             _logger.LogInformation(
                 "ActivePower birimi: {Unit}. Anlık örnek azami yaşı: {MaxAge} dk.",
                 isKilowatt ? "kW→MW" : "MW",
-                Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60));
+                Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 120));
 
             try
             {
@@ -99,7 +99,7 @@ namespace TEİASRestfulApi
             {
                 _logger.LogWarning(
                     "Anlık SCADA verisi yok veya son {MaxAge} dk içinde örnek gelmedi. Dilim {Tarih} {Saat} atlandı.",
-                    Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60),
+                    Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 120),
                     YtbsTimeSlots.FormatTarih(quarterSlot),
                     YtbsTimeSlots.FormatSaat(quarterSlot));
                 return;
@@ -177,7 +177,7 @@ namespace TEİASRestfulApi
         private List<ScadaDbRow> GetScadaDataList()
         {
             using var connection = new MySqlConnection(_settings.ConnectionString);
-            int maxAgeMinutes = Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 60);
+            int maxAgeMinutes = Math.Clamp(_settings.AnlikMaxAgeMinutes, 5, 120);
             string sql = $@"
                 SELECT
                     m.TEIAS_PLANT_ID AS LisanssizSantralId,

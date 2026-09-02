@@ -16,7 +16,8 @@ public class YtbsSettings
 
     /// <summary>
     /// Anlık gönderimde son örneğin en fazla kaç dakika eski olabileceği.
+    /// Zenon saatte bir bastığı için varsayılan 75'tir (üst sınır 120).
     /// Daha eski örnekler yok sayılır (stale plant gönderilmez).
     /// </summary>
-    public int AnlikMaxAgeMinutes { get; set; } = 20;
+    public int AnlikMaxAgeMinutes { get; set; } = 75;
 }

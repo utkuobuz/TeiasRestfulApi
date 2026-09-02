@@ -13,7 +13,7 @@ Her iki kanal da `Zenon_Export_DATA` içindeki `*.ActivePower` değişkenlerini 
 
 * Zamanlayıcı duvar saatine kilitlidir; servis açılınca bir sonraki (veya 30 sn içindeki) çeyreği bekler.
 * 15 dakikalık `saat` alanı her zaman `00 / 15 / 30 / 45` olarak gider.
-* Anlık sorguda yalnızca son **20 dakika** içinde örneği olan santraller gönderilir. Daha eski örnekler atlanır (sıfır basılmaz).
+* Anlık sorguda yalnızca son **75 dakika** içinde örneği olan santraller gönderilir. Zenon `Zenon_Export_DATA` tablosuna saatte bir (`HH:00`) bastığı için pencere bir saatlik dump’ı kaçırmayacak kadar geniştir. Daha eski örnekler atlanır (sıfır basılmaz).
 * Aynı `TEIAS_PLANT_ID` altındaki birden fazla `ActivePower` (trafo/inverter) timestamp’ten bağımsız toplanır.
 * Saatlik etiket, tamamlanmış saatin başıdır (`15:05` → `14:00`; `00:05` → bir önceki gün `23:00`).
 * `ActivePowerUnit` `kW` ise gönderimden önce değer 1000’e bölünür. Varsayılan `MW`’dir.
@@ -48,7 +48,7 @@ YtbsSettings__AnlikMaxAgeMinutes
     "BaseUrl": "https://ytbsws.teias.gov.tr/ytbs-webservis/rest/",
     "ConnectionString": "Server=127.0.0.1;Port=3306;Database=scada;Uid=USER;Pwd=PASSWORD;",
     "ActivePowerUnit": "MW",
-    "AnlikMaxAgeMinutes": 20
+    "AnlikMaxAgeMinutes": 75
   }
 }
 ```
