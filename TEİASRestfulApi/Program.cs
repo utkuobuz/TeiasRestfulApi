@@ -13,6 +13,10 @@ builder.Services.AddWindowsService(options =>
 
 builder.Services.Configure<YtbsSettings>(builder.Configuration.GetSection("YtbsSettings"));
 builder.Services.AddHttpClient<YTBSClient>();
+builder.Services.AddSingleton<YtbsMailSender>();
+builder.Services.AddSingleton<YtbsValueScaleStore>();
+builder.Services.AddSingleton<YtbsReportedLimitStore>();
+builder.Services.AddSingleton<YtbsSlotDeliveryStore>();
 builder.Services.AddHostedService<YtbsWorker>();
 
 var host = builder.Build();

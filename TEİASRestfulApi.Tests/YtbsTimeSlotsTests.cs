@@ -23,7 +23,7 @@ public class YtbsTimeSlotsTests
     }
 
     [Fact]
-    public void GetPreviousHourStart_uses_completed_hour_including_midnight()
+    public void GetPreviousHourStart_is_sql_and_mail_window_not_teias_label()
     {
         var afternoon = DateTime.Parse("2026-09-02 15:05:00");
         Assert.Equal(DateTime.Parse("2026-09-02 14:00:00"), YtbsTimeSlots.GetPreviousHourStart(afternoon));
@@ -34,6 +34,35 @@ public class YtbsTimeSlotsTests
         Assert.Equal(DateTime.Parse("2026-09-02 23:00:00"), previous);
         Assert.Equal("2026-09-02", YtbsTimeSlots.FormatTarih(previous));
         Assert.Equal("23:00", YtbsTimeSlots.FormatSaat(previous));
+    }
+
+    [Theory]
+    [InlineData("2026-09-02 12:17:00", "2026-09-02", "12:15")]
+    [InlineData("2026-09-02 12:00:00", "2026-09-02", "12:00")]
+    [InlineData("2026-09-02 12:00:10", "2026-09-02", "12:00")]
+    [InlineData("2026-09-03 00:00:00", "2026-09-02", "24:00")]
+    [InlineData("2026-09-03 00:05:00", "2026-09-02", "24:00")]
+    [InlineData("2026-09-03 00:14:59", "2026-09-02", "24:00")]
+    [InlineData("2026-09-03 00:15:00", "2026-09-03", "00:15")]
+    public void ToAnlikApiSlot_uses_completed_quarter_end_and_2400(string nowText, string tarih, string saat)
+    {
+        YtbsApiSlot slot = YtbsTimeSlots.ToAnlikApiSlot(DateTime.Parse(nowText));
+        Assert.Equal(tarih, slot.Tarih);
+        Assert.Equal(saat, slot.Saat);
+    }
+
+    [Theory]
+    [InlineData("2026-09-02 08:05:00", "2026-09-02", "08:00")]
+    [InlineData("2026-09-02 08:00:00", "2026-09-02", "08:00")]
+    [InlineData("2026-09-02 08:14:00", "2026-09-02", "08:00")]
+    [InlineData("2026-09-03 00:05:00", "2026-09-02", "24:00")]
+    [InlineData("2026-09-03 00:00:00", "2026-09-02", "24:00")]
+    [InlineData("2026-09-03 01:05:00", "2026-09-03", "01:00")]
+    public void ToSaatlikApiSlot_labels_completed_hour_end(string nowText, string tarih, string saat)
+    {
+        YtbsApiSlot slot = YtbsTimeSlots.ToSaatlikApiSlot(DateTime.Parse(nowText));
+        Assert.Equal(tarih, slot.Tarih);
+        Assert.Equal(saat, slot.Saat);
     }
 
     [Theory]
